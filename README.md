@@ -53,7 +53,7 @@ You do **not** need to register this package on PyPI.
 ### Install directly from GitHub
 
 ```bash
-pip install "aic-vllm-proxy[server,client] @ git+https://github.com/<YOUR_ORG>/aic-vllm-proxy.git"
+pip install "aic-vllm-proxy[server,client] @ git+https://github.com/aic-factcheck/aic-vllm-proxy.git"
 ````
 
 Extras:
@@ -195,6 +195,7 @@ for OpenAI API compatibility.
 * Proxy is intended for **single-user or controlled multi-user** setups
 * `vllm` must be installed separately and available in `$PATH`
 * Logs are stored locally on the server node
+* Documentation and most of the code base created with help of ChatGPT 5.2
 
 ---
 
