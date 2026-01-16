@@ -267,3 +267,15 @@ async def proxy_all(request: Request, path: str):
     # Return proxied response (keep content-type, etc.)
     # Note: some headers like content-encoding may not be appropriate to forward if you transform content (we don't).
     return Response(content=resp.content, status_code=resp.status_code, headers=dict(resp.headers))
+
+
+def main():
+    import argparse
+    import uvicorn
+
+    parser = argparse.ArgumentParser(description="AIC vLLM Proxy")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8224, help="Proxy server port (FastAPI)")
+    args = parser.parse_args()
+
+    uvicorn.run("aic_vllm_proxy.server:app", host=args.host, port=args.port)
