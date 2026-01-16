@@ -52,6 +52,32 @@ def _make_log_path_prefix(model_spec: str) -> str:
     safe = safe[:120].rstrip("_")
     return f"{LOG_DIR}/{ts}_{safe}"
 
+def _canonicalize_model_spec(model_spec: str, port: int) -> tuple[str, list[str]]:
+    """
+    Returns (canonical_string, tokens) where:
+      - args are shlex-split
+      - --port is forced to exactly `port` (replaces any existing --port value)
+    """
+    tokens = shlex.split(model_spec)
+
+    # Remove any existing --port <value> (handle repeated occurrences)
+    out = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i] == "--port":
+            i += 2  # skip flag + value
+            continue
+        out.append(tokens[i])
+        i += 1
+
+    # Force our port at the end (last-wins, deterministic)
+    out += ["--port", str(port)]
+
+    # Canonical string mainly for logging/storage
+    canonical = " ".join(shlex.quote(t) for t in out)
+    return canonical, out
+
+
 
 def start_vllm_server(model_spec: str) -> Tuple[subprocess.Popen, str]:
     """
@@ -129,20 +155,42 @@ def kill_current_server():
     current_log_path = None
 
 
-async def wait_for_ready(timeout_s: float = VLLM_STARTUP_TIMEOUT_S) -> bool:
+async def wait_for_ready(
+    proc: subprocess.Popen,
+    timeout_s: float = VLLM_STARTUP_TIMEOUT_S,
+) -> bool:
     """
-    Poll vLLM until /v1/models returns 200. This implies the model is loaded and serving.
+    Poll vLLM until /v1/models returns 200 (and looks like OpenAI models list),
+    but fail fast if the vLLM process exits (e.g., model load failure).
     """
     deadline = asyncio.get_event_loop().time() + timeout_s
+
     async with httpx.AsyncClient() as client:
         while asyncio.get_event_loop().time() < deadline:
+            # 1) Process still alive?
+            rc = proc.poll()
+            if rc is not None:
+                # Process exited
+                return False
+
+            # 2) API ready?
             try:
                 r = await client.get(f"{VLLM_BASE}/v1/models", timeout=2.0)
                 if r.status_code == 200:
-                    return True
+                    # Optional: sanity-check response shape to avoid false positives
+                    try:
+                        j = r.json()
+                        if isinstance(j, dict) and j.get("object") == "list" and "data" in j:
+                            return True
+                        # If it’s 200 but not expected shape, keep waiting
+                    except Exception:
+                        # If JSON parse fails, keep waiting
+                        pass
             except Exception:
                 pass
+
             await asyncio.sleep(VLLM_POLL_INTERVAL_S)
+
     return False
 
 
@@ -159,48 +207,59 @@ def status():
         "log_path": current_log_path,
     }
 
+switch_lock = asyncio.Lock()
 
 @app.post("/switch")
 async def switch_model(payload: dict):
     """
     Switch to a different model "flavor" identified by model_spec (full CLI args).
     payload: {"model_spec": "meta-llama/Llama-2-7b-hf --port 8000 --gpu-memory-utilization 0.9 ..."}
-    NOTE: If you pass --port, ensure it matches VLLM_PORT (or adjust VLLM_PORT).
     """
-    global current_process, current_model_spec
-
-    model_spec = payload.get("model_spec")
-    if not model_spec:
-        raise HTTPException(status_code=400, detail="model_spec is required")
     
-    # append the port
-    model_spec += f"\n --port {VLLM_PORT}"
+    async with switch_lock:
+        global current_process, current_model_spec
 
-    # If identical to current, no-op
-    if current_process is not None and current_model_spec == model_spec:
-        return {
-            "status": "already running",
-            "pid": current_process.pid,
-            "model_spec": current_model_spec,
-            "log_path": current_log_path,
-        }
+        raw_spec = payload.get("model_spec")
+        if not raw_spec:
+            raise HTTPException(status_code=400, detail="model_spec is required")
+        
+        model_spec, model_tokens = _canonicalize_model_spec(raw_spec, VLLM_PORT)
+        
+        # If identical to current, no-op
+        if current_process is not None and current_model_spec == model_spec:
+            return {
+                "status": "already running",
+                "pid": current_process.pid,
+                "model_spec": current_model_spec,
+                "log_path": current_log_path,
+            }
 
-    # Kill existing and start new
-    kill_current_server()
-    proc, log_path = start_vllm_server(model_spec)
-    current_process = proc
-    current_model_spec = model_spec
-
-    ready = await wait_for_ready()
-    if not ready:
-        # Keep logs for diagnosis, but stop the stuck process
+        # Kill existing and start new
         kill_current_server()
-        raise HTTPException(
-            status_code=504,
-            detail=f"vLLM did not become ready within {VLLM_STARTUP_TIMEOUT_S}s. See log: {log_path}",
-        )
+        proc, log_path = start_vllm_server(model_spec)
+        current_process = proc
+        current_model_spec = model_spec
 
-    return {"status": "ready", "pid": proc.pid, "model_spec": model_spec, "log_path": log_path}
+        ready = await wait_for_ready(proc)
+        if not ready:
+            # Capture exit code if it died
+            rc = proc.poll()
+
+            # Ensure it’s not left running in a weird state
+            kill_current_server()
+
+            if rc is not None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"vLLM exited during startup (exit_code={rc}). See log: {log_path}",
+                )
+
+            raise HTTPException(
+                status_code=504,
+                detail=f"vLLM did not become ready within {VLLM_STARTUP_TIMEOUT_S}s. See log: {log_path}",
+            )
+
+        return {"status": "ready", "pid": proc.pid, "model_spec": model_spec, "log_path": log_path}
 
 
 # ----------------------------
