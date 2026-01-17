@@ -19,7 +19,7 @@ VLLM_HOST = "127.0.0.1"
 VLLM_PORT = 8225
 VLLM_BASE = f"http://{VLLM_HOST}:{VLLM_PORT}"
 
-PROXY_REQUEST_TIMEOUT_S = 600.0          # inference requests may be long
+PROXY_REQUEST_TIMEOUT_S = 3600.0         # inference requests may be long
 VLLM_STARTUP_TIMEOUT_S = 900.0           # model loading can take minutes
 VLLM_POLL_INTERVAL_S = 1.0
 
