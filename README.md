@@ -1,5 +1,8 @@
 # AIC vLLM Proxy
 
+*Supported by the Technology Agency of the Czech Republic project:  
+[Applied Legal Language Model and Benchmarks for Legal Practice (FW11020230)](https://starfos.tacr.cz/en/projekty/FW11020230?query=3wuaaacagqkq)*
+
 A lightweight **FastAPI-based proxy** that manages the lifecycle of a `vllm serve`
 process and forwards all OpenAI-compatible API requests to it.
 
@@ -200,5 +203,6 @@ for OpenAI API compatibility.
 ---
 
 ## License
-
 MIT License
+
+© AIC, Czech Technical University in Prague, 2026
